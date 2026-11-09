@@ -10,16 +10,16 @@
   />
   <div
     v-show="!showCheckpoints"
-    class="itemse-center relative flex h-full w-full flex-col justify-center bg-bg-secondary p-1"
+    class="pane-shell"
   >
     <div class="relative flex h-full w-full flex-col gap-1 rounded-md">
       <!-- Header -->
-      <div class="flex justify-between rounded-sm p-1">
-        <div class="flex flex-1 items-center gap-2 text-accent">
-          <Sparkles :size="18" />
-          <span class="text-sm font-semibold text-main">Word GPT+</span>
+      <div class="pane-head">
+        <div class="pane-brand">
+          <span class="pane-mark"><Sparkles :size="14" /></span>
+          <span>LexDesk</span>
         </div>
-        <div class="flex items-center gap-1 rounded-md border border-accent/10">
+        <div class="pane-actions">
           <CustomButton
             :title="t('newChat')"
             :icon="Plus"
@@ -50,51 +50,66 @@
         </div>
       </div>
 
-      <!-- Quick Actions Bar -->
-      <div class="flex w-full items-center justify-center gap-2 overflow-hidden rounded-md">
-        <CustomButton
-          v-for="action in quickActions"
-          :key="action.key"
-          :title="action.label"
-          text=""
-          :icon="action.icon"
-          type="secondary"
-          :icon-size="16"
-          class="shrink-0! bg-surface! p-1.5!"
+      <!-- Capability pills (only once a conversation is running) -->
+      <div v-if="history.length > 0" class="chip-row">
+        <button
+          v-for="action in legalActions"
+          :key="action.id"
+          class="chip chip-sm"
           :disabled="loading"
-          @click="applyQuickAction(action.key)"
-        />
-        <SingleSelect
-          v-model="selectedPromptId"
-          :key-list="savedPrompts.map(prompt => prompt.id)"
-          :placeholder="t('selectPrompt')"
-          title=""
-          :fronticon="false"
-          class="max-w-xs! flex-1! bg-surface! text-xs!"
-          @change="loadSelectedPrompt"
+          @click="applyLegalAction(action.id)"
         >
-          <template #item="{ item }">
-            {{ savedPrompts.find(prompt => prompt.id === item)?.name || item }}
-          </template>
-        </SingleSelect>
+          <component :is="action.icon" :size="12" />
+          {{ action.label }}
+        </button>
+        <button class="chip chip-sm chip-warn" :disabled="loading" @click="runRedaction">
+          <Eraser :size="12" />
+          {{ t('legalRedact') }}
+        </button>
       </div>
 
       <!-- Chat Messages Container -->
       <div
         ref="messagesContainer"
-        class="flex flex-1 flex-col gap-4 overflow-y-auto rounded-md border border-border-secondary bg-surface p-2 shadow-sm"
+        class="pane-messages"
       >
-        <div
-          v-if="history.length === 0"
-          class="flex h-full flex-col items-center justify-center gap-4 p-8 text-center text-accent"
-        >
-          <Sparkles :size="32" />
-          <p class="font-semibold text-main">
-            {{ $t('emptyTitle') }}
-          </p>
-          <p class="text-xs font-semibold text-secondary">
-            {{ $t('emptySubtitle') }}
-          </p>
+        <div v-if="history.length === 0" class="empty-hero">
+          <div class="empty-mark"><Sparkles :size="16" /></div>
+          <p class="empty-title">{{ $t('emptyTitle') }}</p>
+          <p class="empty-sub">{{ $t('emptySubtitle') }}</p>
+
+          <p class="empty-title">{{ t('legalStartTitle') }}</p>
+
+          <div class="chip-list">
+            <button
+              v-for="action in legalActions"
+              :key="action.id"
+              class="chip"
+              :disabled="loading"
+              @click="applyLegalAction(action.id)"
+            >
+              <component :is="action.icon" :size="12" />
+              <span>{{ action.label }}</span>
+              <span class="chev">›</span>
+            </button>
+            <button class="chip chip-warn" :disabled="loading" @click="runRedaction">
+              <Eraser :size="12" />
+              <span>{{ t('legalRedact') }}</span>
+              <span class="chev">›</span>
+            </button>
+          </div>
+
+          <div class="chip-row chip-row-wrap">
+            <button
+              v-for="action in quickActions"
+              :key="action.key"
+              class="chip chip-xs"
+              :disabled="loading"
+              @click="applyQuickAction(action.key)"
+            >
+              {{ action.label }}
+            </button>
+          </div>
         </div>
 
         <div
@@ -107,10 +122,28 @@
             class="flex min-w-0 flex-1 flex-col gap-1 group-[.assistant]:items-start group-[.assistant]:text-left group-[.user]:items-end group-[.user]:text-left"
           >
             <div
-              class="group max-w-[95%] rounded-md border border-border-secondary p-1 text-sm leading-[1.4] wrap-break-word whitespace-pre-wrap text-main/90 shadow-sm group-[.assistant]:bg-bg-tertiary group-[.assistant]:text-left group-[.user]:bg-accent/10"
+              class="group max-w-[95%] rounded-md border border-border-secondary p-2 text-sm leading-[1.4] wrap-break-word text-main/90 shadow-sm group-[.assistant]:bg-bg-tertiary group-[.assistant]:text-left group-[.user]:bg-accent/10 group-[.user]:whitespace-pre-wrap"
             >
               <template v-for="(segment, idx) in renderSegments(msg)" :key="idx">
-                <span v-if="segment.type === 'text'">{{ segment.text.trim() }}</span>
+                <!-- eslint-disable-next-line vue/no-v-html -- markdown-it runs with html:false -->
+                <div
+                  v-if="segment.type === 'text' && msg instanceof AIMessage"
+                  class="md-body"
+                  v-html="renderMarkdown(segment.text.trim())"
+                ></div>
+                <div v-else-if="segment.type === 'text'" class="wa-msg">
+                  <div
+                    v-if="splitSelection(segment.text).quote"
+                    class="wa-quote"
+                    :class="{ open: isQuoteOpen(index) }"
+                  >
+                    <div class="wa-quote-text">{{ splitSelection(segment.text).quote }}</div>
+                    <button class="wa-readmore" @click="toggleQuote(index)">
+                      {{ isQuoteOpen(index) ? 'Show less' : 'Read more' }}
+                    </button>
+                  </div>
+                  <div class="wa-body">{{ splitSelection(segment.text).body }}</div>
+                </div>
                 <details v-else class="mb-1 rounded-sm border border-border-secondary bg-bg-secondary">
                   <summary class="cursor-pointer list-none p-1 text-sm font-semibold text-secondary">
                     Thought process
@@ -155,87 +188,84 @@
       </div>
 
       <!-- Input Area -->
-      <div class="flex flex-col gap-1 rounded-md">
-        <div class="flex items-center justify-between gap-2 overflow-hidden">
-          <div class="flex shrink-0 gap-1 rounded-sm border border-border bg-surface p-0.5">
-            <button
-              class="cursor-po flex h-7 w-7 items-center justify-center rounded-md border-none text-secondary hover:bg-accent/30 hover:text-white! [.active]:text-accent"
-              :class="{ active: mode === 'ask' }"
-              title="Ask Mode"
-              @click="mode = 'ask'"
-            >
-              <MessageSquare :size="14" />
-            </button>
-            <button
-              class="cursor-po flex h-7 w-7 items-center justify-center rounded-md border-none text-secondary hover:bg-accent/30 hover:text-white! [.active]:text-accent"
-              :class="{ active: mode === 'agent' }"
-              title="Agent Mode"
-              @click="mode = 'agent'"
-            >
-              <BotMessageSquare :size="17" />
-            </button>
-          </div>
-          <div class="flex min-w-0 flex-1 gap-1 overflow-hidden">
-            <select
-              v-model="settingForm.api"
-              class="h-7 max-w-full min-w-0 cursor-pointer rounded-md border border-border bg-surface p-1 text-xs text-secondary hover:border-accent focus:outline-none disabled:cursor-not-allowed disabled:bg-secondary"
-            >
-              <option v-for="item in settingPreset.api.optionObj" :key="item.value" :value="item.value">
-                {{ item.label.replace('official', 'OpenAI') }}
-              </option>
-            </select>
-            <select
-              v-if="currentModelOptions && currentModelOptions.length > 0"
-              v-model="currentModelSelect"
-              class="h-7 max-w-full min-w-0 cursor-pointer rounded-md border border-border bg-surface p-1 text-xs text-secondary hover:border-accent focus:outline-none"
-            >
-              <option v-for="item in currentModelOptions" :key="item" :value="item">
-                {{ item }}
-              </option>
-            </select>
-          </div>
+      <div class="composer">
+        <div v-if="selectionPreview" class="context-pill">
+          <Quote :size="11" />
+          <span class="context-text">{{ selectionPreview }}</span>
+          <span class="context-count">{{ selectionPreview.length }} chars</span>
+          <button class="context-x" title="Remove" @click="dismissSelection">×</button>
         </div>
-        <div
-          class="flex min-w-12 items-center gap-2 rounded-md border border-border bg-surface p-2 focus-within:border-accent"
-        >
+        <div class="composer-input">
           <textarea
             ref="inputTextarea"
             v-model="userInput"
-            class="placeholder::text-secondary block max-h-30 flex-1 resize-none overflow-y-auto border-none bg-transparent py-2 text-xs leading-normal text-main outline-none placeholder:text-xs"
+            class="composer-textarea"
             :placeholder="mode === 'ask' ? $t('askAnything') : $t('directTheAgent')"
             rows="1"
             @keydown.enter.exact.prevent="sendMessage"
             @input="adjustTextareaHeight"
           />
-          <button
-            v-if="loading"
-            class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border-none bg-danger text-white"
-            title="Stop"
-            @click="stopGeneration"
-          >
-            <Square :size="18" />
+          <button v-if="loading" class="composer-send stop" title="Stop" @click="stopGeneration">
+            <Square :size="11" />
           </button>
           <button
             v-else
-            class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border-none bg-accent text-white disabled:cursor-not-allowed disabled:bg-accent/50"
+            class="composer-send"
             title="Send"
             :disabled="!userInput.trim()"
             @click="sendMessage"
           >
-            <Send :size="18" />
+            <Send :size="12" />
           </button>
         </div>
-        <div class="flex justify-center gap-3 px-1">
-          <label class="flex h-3.5 w-3.5 flex-1 cursor-pointer items-center gap-1 text-xs text-secondary">
+
+        <div class="composer-meta">
+          <div class="seg">
+            <button :class="{ on: mode === 'ask' }" title="Ask Mode" @click="mode = 'ask'">
+              <MessageSquare :size="11" />
+            </button>
+            <button :class="{ on: mode === 'agent' }" title="Agent Mode" @click="mode = 'agent'">
+              <BotMessageSquare :size="11" />
+            </button>
+          </div>
+
+          <select v-model="settingForm.api" class="meta-select" title="Provider">
+            <option v-for="item in settingPreset.api.optionObj" :key="item.value" :value="item.value">
+              {{ item.label.replace('official', 'OpenAI') }}
+            </option>
+          </select>
+
+          <select
+            v-if="currentModelOptions && currentModelOptions.length > 0"
+            v-model="currentModelSelect"
+            class="meta-select model"
+            title="Model"
+          >
+            <option v-for="item in currentModelOptions" :key="item" :value="item">{{ item }}</option>
+          </select>
+
+          <span class="meta-spacer"></span>
+
+          <div class="seg seg-mode" :title="$t('outputModeHint')">
+            <button :class="{ on: outputMode === 'chat' }" @click="outputMode = 'chat'">
+              <MessageSquare :size="10" />
+            </button>
+            <button :class="{ on: outputMode === 'apply' }" @click="outputMode = 'apply'">
+              <FileCheck :size="10" />
+            </button>
+          </div>
+
+          <label class="meta-toggle" :title="$t('useWordFormattingLabel')">
             <input v-model="useWordFormatting" type="checkbox" />
-            <span>{{ $t('useWordFormattingLabel') }}</span>
+            <FileText :size="11" />
           </label>
-          <label class="flex h-3.5 w-3.5 flex-1 cursor-pointer items-center gap-1 text-xs text-secondary">
+          <label class="meta-toggle" :title="$t('includeSelectionLabel')">
             <input v-model="useSelectedText" type="checkbox" />
-            <span>{{ $t('includeSelectionLabel') }}</span>
+            <FileCheck :size="11" />
           </label>
         </div>
       </div>
+
     </div>
   </div>
 </template>
@@ -247,13 +277,20 @@ import {
   BookOpen,
   BotMessageSquare,
   CheckCircle,
+  ClipboardList,
   Copy,
+  Eraser,
   FileCheck,
+  FileSearch,
   FileText,
   Globe,
   History,
+  Languages,
+  ListChecks,
   MessageSquare,
   Plus,
+  Quote,
+  Scale,
   Send,
   Settings,
   Sparkle,
@@ -263,7 +300,7 @@ import {
 import { useStorage } from '@vueuse/core'
 import { v4 as uuidv4 } from 'uuid'
 import type { Component } from 'vue'
-import { computed, nextTick, onBeforeMount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeMount, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
@@ -272,7 +309,6 @@ import { insertFormattedResult, insertResult } from '@/api/common'
 import type { ProviderConfig } from '@/api/types'
 import { getAgentResponse, getChatResponse } from '@/api/union'
 import CustomButton from '@/components/CustomButton.vue'
-import SingleSelect from '@/components/SingleSelect.vue'
 import CheckPointsPage from '@/pages/checkPointsPage.vue'
 import { getActiveTools } from '@/utils/activeTools'
 import { messageContentToText, restoreChatMessages } from '@/utils/chatMessages'
@@ -281,7 +317,11 @@ import type { buildInPrompt } from '@/utils/constant'
 import { getBuiltInPrompt } from '@/utils/constant'
 import { logDiagnostic } from '@/utils/diagnostics'
 import { localStorageKey } from '@/utils/enum'
+import type { LegalActionId } from '@/utils/legalPrompts'
+import { legalPrompts } from '@/utils/legalPrompts'
+import { renderMarkdown } from '@/utils/markdown'
 import { message as messageUtil } from '@/utils/message'
+import { scanPII, tagFindings } from '@/utils/redaction'
 import useSettingForm from '@/utils/settingForm'
 import { settingPreset } from '@/utils/settingPreset'
 
@@ -313,23 +353,6 @@ function loadSavedPrompts() {
   }
 }
 
-function loadSelectedPrompt() {
-  if (!selectedPromptId.value) {
-    customSystemPrompt.value = ''
-    return
-  }
-
-  const prompt = savedPrompts.value.find(p => p.id === selectedPromptId.value)
-  if (prompt) {
-    customSystemPrompt.value = prompt.systemPrompt
-    userInput.value = prompt.userPrompt
-    adjustTextareaHeight()
-
-    if (inputTextarea.value) {
-      inputTextarea.value.focus()
-    }
-  }
-}
 
 // Chat state
 const mode = useStorage(localStorageKey.chatMode, 'ask' as 'ask' | 'agent')
@@ -510,13 +533,15 @@ async function sendMessage() {
 
   // Get selected text from Word
   let selectedText = ''
-  if (useSelectedText.value) {
-    selectedText = await Word.run(async ctx => {
-      const range = ctx.document.getSelection()
-      range.load('text')
-      await ctx.sync()
-      return range.text
-    })
+  if (useSelectedText.value && !selectionDismissed.value) {
+    selectedText =
+      selectionPreview.value ||
+      (await Word.run(async ctx => {
+        const range = ctx.document.getSelection()
+        range.load('text')
+        await ctx.sync()
+        return range.text
+      }))
   }
 
   // Add user message
@@ -542,6 +567,7 @@ async function sendMessage() {
   } finally {
     loading.value = false
     abortController.value = null
+    selectionDismissed.value = false
   }
 }
 
@@ -589,6 +615,179 @@ async function applyQuickAction(actionKey: keyof typeof buildInPrompt) {
     loading.value = false
     abortController.value = null
   }
+}
+
+const legalActions = computed<{ id: LegalActionId; label: string; icon: Component }[]>(() => [
+  { id: 'review', label: t('legalReview'), icon: Scale },
+  { id: 'check', label: t('legalCheck'), icon: FileSearch },
+  { id: 'obligations', label: t('legalObligations'), icon: ListChecks },
+  { id: 'dd', label: t('legalDd'), icon: ClipboardList },
+  { id: 'research', label: t('legalResearch'), icon: BookOpen },
+  { id: 'translate', label: t('legalTranslate'), icon: Languages },
+])
+
+async function applyLegalAction(actionId: LegalActionId) {
+  if (!checkApiKey()) return
+
+  const selectedText = await Word.run(async ctx => {
+    const range = ctx.document.getSelection()
+    range.load('text')
+    await ctx.sync()
+    return range.text
+  })
+
+  if (!selectedText?.trim()) {
+    messageUtil.error(t('selectTextPrompt'))
+    return
+  }
+
+  const { replyLanguage: lang } = settingForm.value
+  const prompt = legalPrompts[actionId]
+  // Keep the chat bubble short: instruction + document go to the model as the system
+  // message, so the transcript shows only the action label instead of a wall of prompt.
+  const systemMessage = `${prompt.system(lang)}\n\n${prompt.user(selectedText, lang)}`
+  const actionLabel = legalActions.value.find(action => action.id === actionId)?.label ?? 'Legal action'
+  const userMessage = new HumanMessage(actionLabel)
+
+  await scrollToBottom()
+
+  loading.value = true
+  abortController.value = new AbortController()
+
+  try {
+    await processChat(userMessage, systemMessage)
+
+    if (outputMode.value === 'apply') {
+      // The answer streamed for ~30s; if the caret moved meanwhile, writing over the
+      // new selection would destroy unrelated text. Verify the selection first.
+      const stillThere = await Word.run(async ctx => {
+        const range = ctx.document.getSelection()
+        range.load('text')
+        await ctx.sync()
+        return (range.text || '').trim()
+      })
+      const expected = selectedText.trim()
+
+      if (stillThere && expected && stillThere.slice(0, 80) !== expected.slice(0, 80)) {
+        messageUtil.warning(t('applySkipped'))
+      } else {
+        const last = [...history.value].reverse().find(m => m instanceof AIMessage)
+        const text = getMessageText(last)
+        if (text.trim()) await insertToDocument(text, 'replace')
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      messageUtil.info(t('generationStop'))
+    } else {
+      logDiagnostic('error', '[Chat] Failed to run legal action', {
+        error,
+        actionId,
+        threadId: threadId.value,
+      })
+      messageUtil.error(t('failedToProcessAction'))
+      history.value.pop()
+    }
+  } finally {
+    loading.value = false
+    abortController.value = null
+  }
+}
+
+async function runRedaction() {
+  const selectedText = await Word.run(async ctx => {
+    const range = ctx.document.getSelection()
+    range.load('text')
+    await ctx.sync()
+    return range.text
+  })
+
+  if (!selectedText?.trim()) {
+    messageUtil.error(t('selectTextPrompt'))
+    return
+  }
+
+  const findings = scanPII(selectedText)
+  if (!findings.length) {
+    messageUtil.info(t('legalRedactNone'))
+    return
+  }
+
+  const tagged = tagFindings(findings).slice(0, 40)
+  let replaced = 0
+
+  await Word.run(async ctx => {
+    const range = ctx.document.getSelection()
+    range.load('text')
+    await ctx.sync()
+
+    let text = range.text || ''
+    for (const finding of tagged) {
+      const before = text
+      text = text.split(finding.value).join(finding.tag)
+      if (text !== before) replaced += 1
+    }
+
+    if (text !== (range.text || '')) {
+      range.insertText(text, 'Replace')
+      await ctx.sync()
+    }
+  })
+
+  messageUtil.success(t('legalRedactDone', { count: replaced }))
+}
+
+// ---- output mode: show the answer in chat, or also write it into the document ----
+const outputMode = useStorage<'chat' | 'apply'>(localStorageKey.outputMode, 'chat')
+
+// ---- WhatsApp-style rendering of "[Selected text: ...]" ----
+const openQuotes = ref<number[]>([])
+
+function splitSelection(content: string): { body: string; quote: string } {
+  const match = (content || '').match(/\[Selected text:\s*"([\s\S]*)"\]\s*$/)
+  if (!match) return { body: (content || '').trim(), quote: '' }
+  return {
+    body: content.slice(0, match.index).trim(),
+    quote: (match[1] || '').trim(),
+  }
+}
+
+function isQuoteOpen(index: number): boolean {
+  return openQuotes.value.includes(index)
+}
+
+function toggleQuote(index: number) {
+  openQuotes.value = isQuoteOpen(index)
+    ? openQuotes.value.filter(i => i !== index)
+    : [...openQuotes.value, index]
+}
+
+// ---- selection context pill ----
+const selectionPreview = ref('')
+const selectionDismissed = ref(false)
+let selectionTimer: ReturnType<typeof setInterval> | null = null
+
+async function refreshSelectionPreview() {
+  if (!useSelectedText.value) {
+    selectionPreview.value = ''
+    return
+  }
+  try {
+    const text = await Word.run(async ctx => {
+      const range = ctx.document.getSelection()
+      range.load('text')
+      await ctx.sync()
+      return range.text
+    })
+    if (!selectionDismissed.value) selectionPreview.value = (text || '').trim()
+  } catch {
+    selectionPreview.value = ''
+  }
+}
+
+function dismissSelection() {
+  selectionDismissed.value = true
+  selectionPreview.value = ''
 }
 
 const agentPrompt = (lang: string) =>
@@ -913,6 +1112,10 @@ async function handleSelectThread(newThreadId: string) {
 }
 
 onBeforeMount(async () => {
+  selectionTimer = setInterval(() => {
+    void refreshSelectionPreview()
+  }, 2500)
+  void refreshSelectionPreview()
   addWatch()
   initData()
   loadSavedPrompts()
@@ -927,5 +1130,9 @@ onBeforeMount(async () => {
       loading.value = false
     }
   }
+})
+
+onBeforeUnmount(() => {
+  if (selectionTimer) clearInterval(selectionTimer)
 })
 </script>

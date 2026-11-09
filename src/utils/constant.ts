@@ -118,6 +118,9 @@ export const buildInPrompt = {
       1. Provide a natural-sounding translation suitable for native speakers.
       2. If the text is technical, use appropriate terminology.
       3. OUTPUT ONLY the translated text. Do not include "Here is the translation" or any explanations.
+      4. Start with the first line of the translation itself. Never open with "Here is", "Sure", "Certainly",
+         "Below is", or a sentence describing what you are about to do.
+      5. Keep numbering, bullet markers and line breaks identical to the source.
       
       Text: ${text}`,
   },

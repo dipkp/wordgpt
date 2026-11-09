@@ -1,5 +1,5 @@
 {
-  "name": "word-gpt-plus",
+  "name": "lexdesk",
   "version": "2.0.2",
   "private": true,
   "type": "module",
@@ -19,7 +19,8 @@
     "lint:style:fix": "pnpm lint:style --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "pnpm format:check && pnpm lint && pnpm lint:style && pnpm typecheck && pnpm lint:dpdm"
+    "check": "pnpm format:check && pnpm lint && pnpm lint:style && pnpm typecheck && pnpm lint:dpdm",
+    "test:legal": "node scripts/check-legal.mts"
   },
   "dependencies": {
     "@langchain/core": "^1.2.17",
@@ -32,6 +33,7 @@
     "@vueuse/core": "^15.0.0",
     "dexie": "^4.4.6",
     "langchain": "^1.5.16",
+    "markdown-it": "^15.0.3",
     "mathjs": "^15.2.0",
     "uuid": "^14.0.3",
     "vue": "^3.5.44",
@@ -43,6 +45,7 @@
     "@commitlint/cli": "^21.2.3",
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.3.3",
+    "@types/markdown-it": "^14.2.0",
     "@types/office-js": "^1.0.611",
     "@vitejs/plugin-vue": "^6.0.10",
     "czg": "^1.14.0",

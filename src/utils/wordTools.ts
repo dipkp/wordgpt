@@ -2,6 +2,7 @@ import { tool } from '@langchain/core/tools'
 import { z } from 'zod'
 
 import { getErrorMessage } from './errors'
+import { scanPII, tagFindings } from './redaction'
 import type { ToolSelection } from './toolPermissions'
 import { readToolPreference, resolveToolSelection, toolPermissionError } from './toolPermissions'
 
@@ -29,6 +30,11 @@ export type WordToolName =
   | 'goToBookmark'
   | 'insertContentControl'
   | 'findText'
+  | 'insertComment'
+  | 'setTrackChanges'
+  | 'setHeaderFooter'
+  | 'setParagraphFormat'
+  | 'redactDocument'
 
 type PropertyValue<P extends ToolProperty> = P extends { enum: readonly (infer E)[] }
   ? E
@@ -888,6 +894,191 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
           null,
           2,
         )
+      })
+    },
+  }),
+
+  insertComment: defineWordTool({
+    name: 'insertComment',
+    description:
+      'Attach a Word comment to the current selection. Use it to record a review note without changing the text.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: {
+          type: 'string',
+          description: 'Comment body, plain text',
+        },
+      },
+      required: ['text'],
+    },
+    execute: async args => {
+      return Word.run(async context => {
+        context.document.getSelection().insertComment(args.text)
+        await context.sync()
+        return 'Comment added to the current selection.'
+      })
+    },
+  }),
+
+  setTrackChanges: defineWordTool({
+    name: 'setTrackChanges',
+    description:
+      'Turn Word revision tracking on or off. While on, every edit is recorded as a tracked revision the user can accept or reject.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'true to track subsequent edits, false to stop tracking',
+        },
+      },
+      required: ['enabled'],
+    },
+    execute: async args => {
+      return Word.run(async context => {
+        context.document.changeTrackingMode = args.enabled ? 'TrackAll' : 'Off'
+        await context.sync()
+        return `Track changes ${args.enabled ? 'enabled' : 'disabled'}.`
+      })
+    },
+  }),
+
+  setHeaderFooter: defineWordTool({
+    name: 'setHeaderFooter',
+    description: 'Write text into the primary header and/or footer of the first document section.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        header: {
+          type: 'string',
+          description: 'Header text. Omit to leave the header untouched.',
+        },
+        footer: {
+          type: 'string',
+          description: 'Footer text. Omit to leave the footer untouched.',
+        },
+      },
+      required: [],
+    },
+    execute: async args => {
+      const header = typeof args.header === 'string' ? args.header : ''
+      const footer = typeof args.footer === 'string' ? args.footer : ''
+      if (!header && !footer) return 'Provide a header or a footer value.'
+
+      return Word.run(async context => {
+        const sections = context.document.sections
+        sections.load('items')
+        await context.sync()
+
+        const section = sections.items[0]
+        if (!section) return 'No document section found.'
+
+        if (header) section.getHeader('Primary').insertText(header, 'Replace')
+        if (footer) section.getFooter('Primary').insertText(footer, 'Replace')
+        await context.sync()
+
+        return `Header/footer updated on section 1 of ${sections.items.length}.`
+      })
+    },
+  }),
+
+  setParagraphFormat: defineWordTool({
+    name: 'setParagraphFormat',
+    description:
+      'Set paragraph-level formatting on the selection or the whole document: alignment, line spacing (points) and space after (points). Omit a property to leave it unchanged.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        alignment: {
+          type: 'string',
+          description: 'left | centered | right | justified. Omit to keep the current alignment.',
+        },
+        lineSpacing: {
+          type: 'number',
+          description: 'Line spacing in points. Omit to keep.',
+        },
+        spaceAfter: {
+          type: 'number',
+          description: 'Space after each paragraph in points. Omit to keep.',
+        },
+        scope: {
+          type: 'string',
+          description: 'selection (default) or document',
+        },
+      },
+      required: [],
+    },
+    execute: async args => {
+      const scope = args.scope === 'document' ? 'document' : 'selection'
+
+      return Word.run(async context => {
+        const paragraphs =
+          scope === 'document'
+            ? context.document.body.paragraphs
+            : context.document.getSelection().paragraphs
+
+        paragraphs.load('items')
+        await context.sync()
+
+        const items = paragraphs.items.slice(0, 400)
+        for (const paragraph of items) {
+          if (args.alignment) paragraph.alignment = args.alignment as Word.Alignment
+          if (typeof args.lineSpacing === 'number') paragraph.lineSpacing = args.lineSpacing
+          if (typeof args.spaceAfter === 'number') paragraph.spaceAfter = args.spaceAfter
+        }
+        await context.sync()
+
+        return `Applied paragraph formatting to ${items.length} paragraph(s).`
+      })
+    },
+  }),
+
+  redactDocument: defineWordTool({
+    name: 'redactDocument',
+    description:
+      'Replace emails, phone numbers, card numbers, IBANs and long national ID numbers with placeholders such as [EMAIL-1]. Runs locally with regular expressions — no model call, no text leaves the machine. Personal names and free-text addresses are NOT detected; review afterwards.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: {
+          type: 'string',
+          description: 'selection (default) or document',
+        },
+      },
+      required: [],
+    },
+    execute: async args => {
+      const scope = args.scope === 'document' ? 'document' : 'selection'
+
+      return Word.run(async context => {
+        const source =
+          scope === 'document' ? context.document.body : context.document.getSelection()
+        source.load('text')
+        await context.sync()
+
+        const findings = scanPII(source.text || '')
+        if (!findings.length) {
+          return 'No emails, phone numbers, card numbers, IBANs or long ID numbers found.'
+        }
+
+        const tagged = tagFindings(findings).slice(0, 40)
+        const body = context.document.body
+        let replaced = 0
+
+        for (const finding of tagged) {
+          const hits = body.search(finding.value, { matchCase: true })
+          hits.load('items')
+          await context.sync()
+
+          for (const hit of hits.items) {
+            hit.insertText(finding.tag, 'Replace')
+            replaced += 1
+          }
+          await context.sync()
+        }
+
+        return `Redacted ${replaced} occurrence(s) using ${tagged.length} placeholder(s).`
       })
     },
   }),
