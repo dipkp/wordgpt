@@ -195,7 +195,28 @@
           <span class="context-count">{{ selectionPreview.length }} chars</span>
           <button class="context-x" title="Remove" @click="dismissSelection">×</button>
         </div>
+        <div v-if="attachments.length" class="file-pills">
+          <div v-for="(a, i) in attachments" :key="a.name + i" class="file-pill">
+            <FileText :size="11" />
+            <span class="file-name">{{ a.name }}</span>
+            <span class="file-size">{{ a.size < 1024 ? a.size + ' B' : Math.round(a.size / 1024) + ' KB' }}</span>
+            <button class="context-x" title="Remove" @click="removeAttachment(i)">×</button>
+          </div>
+        </div>
+
+        <input
+          ref="fileInput"
+          type="file"
+          class="file-input"
+          multiple
+          accept=".txt,.md,.csv,.json,.docx"
+          @change="onFilesPicked"
+        />
+
         <div class="composer-input">
+          <button class="attach-btn" title="Attach a file (.txt .md .csv .json .docx)" @click="pickFiles">
+            <Paperclip :size="12" />
+          </button>
           <textarea
             ref="inputTextarea"
             v-model="userInput"
@@ -288,6 +309,7 @@ import {
   Languages,
   ListChecks,
   MessageSquare,
+  Paperclip,
   Plus,
   Quote,
   Scale,
@@ -545,9 +567,16 @@ async function sendMessage() {
   }
 
   // Add user message
-  const fullMessage = new HumanMessage(
-    selectedText ? `${userMessage}\n\n[Selected text: "${selectedText}"]` : userMessage,
-  )
+  const attachmentText = attachments.value
+    .map(a => `[Attached file: ${a.name}]\n${a.text}`)
+    .join('\n\n')
+
+  const parts = [userMessage]
+  if (attachmentText) parts.push(attachmentText)
+  if (selectedText) parts.push(`[Selected text: "${selectedText}"]`)
+
+  const fullMessage = new HumanMessage(parts.join('\n\n'))
+  attachments.value = []
 
   await scrollToBottom()
 
@@ -739,6 +768,116 @@ async function runRedaction() {
 
 // ---- output mode: show the answer in chat, or also write it into the document ----
 const outputMode = useStorage<'chat' | 'apply'>(localStorageKey.outputMode, 'chat')
+
+// ---- file attachments ----
+interface Attachment {
+  name: string
+  size: number
+  text: string
+}
+
+const attachments = ref<Attachment[]>([])
+const fileInput = ref<HTMLInputElement | null>(null)
+
+function pickFiles() {
+  fileInput.value?.click()
+}
+
+function removeAttachment(index: number) {
+  attachments.value.splice(index, 1)
+}
+
+/** Minimal DOCX text extractor: reads word/document.xml out of the zip. */
+async function extractDocx(file: File): Promise<string> {
+  const buf = new Uint8Array(await file.arrayBuffer())
+  const view = new DataView(buf.buffer)
+
+  let eocd = -1
+  for (let i = buf.length - 22; i >= 0 && i > buf.length - 66_000; i -= 1) {
+    if (view.getUint32(i, true) === 0x0605_4b50) {
+      eocd = i
+      break
+    }
+  }
+  if (eocd < 0) return ''
+
+  const entries = view.getUint16(eocd + 10, true)
+  let ptr = view.getUint32(eocd + 16, true)
+
+  for (let n = 0; n < entries; n += 1) {
+    if (view.getUint32(ptr, true) !== 0x0201_4b50) break
+
+    const method = view.getUint16(ptr + 10, true)
+    const compSize = view.getUint32(ptr + 20, true)
+    const nameLen = view.getUint16(ptr + 28, true)
+    const extraLen = view.getUint16(ptr + 30, true)
+    const commentLen = view.getUint16(ptr + 32, true)
+    const localOff = view.getUint32(ptr + 42, true)
+    const name = new TextDecoder().decode(buf.subarray(ptr + 46, ptr + 46 + nameLen))
+
+    if (name === 'word/document.xml') {
+      const lNameLen = view.getUint16(localOff + 26, true)
+      const lExtraLen = view.getUint16(localOff + 28, true)
+      const start = localOff + 30 + lNameLen + lExtraLen
+      const data = buf.subarray(start, start + compSize)
+
+      let xml: string
+      if (method === 0) {
+        xml = new TextDecoder().decode(data)
+      } else {
+        const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
+        xml = await new Response(stream).text()
+      }
+
+      return xml
+        .replace(/<w:p[ >]/g, '\n<w:p ')
+        .replace(/<w:tab\/>/g, ' ')
+        .replace(/<[^>]+>/g, '')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+    }
+
+    ptr += 46 + nameLen + extraLen + commentLen
+  }
+
+  return ''
+}
+
+async function onFilesPicked(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = [...(input.files ?? [])]
+
+  for (const file of files) {
+    if (file.size > 3_000_000) {
+      messageUtil.error(`${file.name}: over 3 MB`)
+      continue
+    }
+
+    let text = ''
+    if (/\.docx$/i.test(file.name)) {
+      text = await extractDocx(file)
+    } else if (/\.(txt|md|csv|json)$/i.test(file.name)) {
+      text = await file.text()
+    } else {
+      messageUtil.warning(`${file.name}: PDF is not supported — paste the text instead`)
+      continue
+    }
+
+    if (!text.trim()) {
+      messageUtil.error(`${file.name}: no text found`)
+      continue
+    }
+
+    attachments.value.push({
+      name: file.name,
+      size: file.size,
+      text: text.slice(0, 30_000),
+    })
+  }
+
+  input.value = ''
+}
 
 // ---- WhatsApp-style rendering of "[Selected text: ...]" ----
 const openQuotes = ref<number[]>([])

@@ -1015,3 +1015,64 @@
   font-weight: 600;
   color: var(--p-ink);
 }
+
+/* ---- file attachments ---- */
+
+.file-input {
+  display: none;
+}
+
+.attach-btn {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: var(--p-muted);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+}
+
+.attach-btn:hover {
+  color: var(--p-accent);
+  background: #f2f6fd;
+}
+
+.file-pills {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 0 4px;
+}
+
+.file-pill {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 3px 6px;
+  font-size: 10.5px;
+  color: var(--p-muted);
+  background: #f7f9fc;
+  border: 1px solid #e6ecf4;
+  border-radius: 6px;
+}
+
+.file-pill svg {
+  flex-shrink: 0;
+  color: var(--p-accent);
+}
+
+.file-name {
+  overflow: hidden;
+  font-weight: 600;
+  color: var(--p-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-size {
+  flex-shrink: 0;
+  color: var(--p-accent);
+}
